@@ -126,7 +126,6 @@ def check_telegram_commands():
         text = msg["text"].strip()
         print(f"[CMD] {text}")
 
-        # ---------------- COMANDOS ----------------
         if text == "/start":
             cmd_start(chat_id)
 
@@ -162,80 +161,82 @@ def check_telegram_commands():
 
 def main():
     print("Iniciando monitoreo…")
-    send_alert("🚀 Monitor de infraestructura Heimtech iniciado.")
+    send_alert("🚀 Monitoreo de infraestructura Heimtech iniciado v1.2")
 
-    status_prev = {}   # Estado previo UP/DOWN
-    down_since = {}    # Timestamp cuando cayó el host
+    status_prev = {}    # Estado previo UP/DOWN
+    down_since = {}     # Timestamp cuando cayó
+    alerted_down = {}   # True si ya se mandó alerta de CAÍDO tras 1 minuto
 
-    # Cargar estado persistente
-    status_json = load_status()
+    status_json = load_status()  # estado persistente para comandos
 
     while True:
-
         HOSTS = load_hosts()
 
-        # Inicializar estados
-        for name in HOSTS:
+        # Inicializar estados para hosts nuevos
+        for name, ip in HOSTS.items():
             if name not in status_prev:
                 status_prev[name] = None
                 down_since[name] = None
-                status_json[name] = "UNKNOWN"
+                alerted_down[name] = False
+                status_json.setdefault(name, "UNKNOWN")
 
         for name, host in HOSTS.items():
             is_up = is_host_up(host)
             now = time.time()
 
-            # Guardar estado en status.json
+            # Actualizar status.json para comandos
             status_json[name] = "UP" if is_up else "DOWN"
             save_status(status_json)
 
-            # --------------------------------------
-            # Primera evaluación
-            # --------------------------------------
+            # ---------- 1) PRIMERA VEZ ----------
             if status_prev[name] is None:
                 status_prev[name] = is_up
                 down_since[name] = None
+                alerted_down[name] = False
                 continue
 
-            # --------------------------------------
-            # SIN CAMBIO DE ESTADO
-            # --------------------------------------
+            # ---------- 2) SIN CAMBIO DE ESTADO ----------
             if is_up == status_prev[name]:
 
-                # Si sigue caído, revisar si ya lleva 1 minuto caído
-                if not is_up and down_since[name] is not None:
-                    if now - down_since[name] >= 60:
+                # Sigue CAÍDO
+                if not is_up and down_since[name] is not None and not alerted_down[name]:
+                    if now - down_since[name] >= 60:  # 1 minuto
                         send_alert(
                             f"🚨 <b>HOST CAÍDO</b>\n"
                             f"<b>{name}</b>\n"
                             f"IP: <code>{host}</code>\n"
                             f"Estado: ❌ INALCANZABLE por más de 1 minuto"
                         )
-                        down_since[name] = None  # Evita alertas repetidas
+                        # Marcamos que ya se envió alerta de CAÍDO
+                        alerted_down[name] = True
 
+                # Sigue UP → no hacemos nada
                 continue
 
-            # --------------------------------------
-            # CAMBIO DE ESTADO
-            # --------------------------------------
-
+            # ---------- 3) CAMBIO DE ESTADO ----------
             # UP → DOWN
             if not is_up:
                 status_prev[name] = False
                 down_since[name] = now
-                print(f"[DOWN] {name} detectado como caído. Evaluando 60s…")
+                alerted_down[name] = False  # todavía no se ha alertado
+                print(f"[DOWN] {name} detectado como caído. Esperando 60s…")
                 continue
 
             # DOWN → UP
             if is_up:
-                send_alert(
-                    f"✅ <b>HOST RECUPERADO</b>\n"
-                    f"<b>{name}</b>\n"
-                    f"IP: <code>{host}</code>\n"
-                    f"Estado: 🟢 RESPONDIENDO"
-                )
+                # Solo alertar recuperación si antes se alertó la caída
+                if alerted_down[name]:
+                    send_alert(
+                        f"✅ <b>HOST RECUPERADO</b>\n"
+                        f"<b>{name}</b>\n"
+                        f"IP: <code>{host}</code>\n"
+                        f"Estado: 🟢 RESPONDIENDO"
+                    )
+
                 status_prev[name] = True
                 down_since[name] = None
+                alerted_down[name] = False
+                continue
 
         # Procesar comandos
         check_telegram_commands()
