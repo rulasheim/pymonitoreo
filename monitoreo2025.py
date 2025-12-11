@@ -30,13 +30,9 @@ from commands import (
 # ==========================================================
 
 def send_alert(text: str):
-    """Envía alertas al canal."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_ALERT_CHANNEL,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+    payload = {"chat_id": TELEGRAM_ALERT_CHANNEL, "text": text, "parse_mode": "HTML"}
+
     try:
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
@@ -44,13 +40,9 @@ def send_alert(text: str):
 
 
 def send_group(text: str):
-    """Responde en el grupo de comandos."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_COMMAND_GROUP,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+    payload = {"chat_id": TELEGRAM_COMMAND_GROUP, "text": text, "parse_mode": "HTML"}
+
     try:
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
@@ -65,7 +57,6 @@ LAST_UPDATE_ID = None
 
 
 def check_telegram_commands():
-    """Lee comandos del grupo y ejecuta funciones."""
     global LAST_UPDATE_ID
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
@@ -86,9 +77,7 @@ def check_telegram_commands():
     for update in resp["result"]:
         LAST_UPDATE_ID = update["update_id"] + 1
 
-        # ----------------------------------------------------
         # CALLBACK BUTTONS
-        # ----------------------------------------------------
         if "callback_query" in update:
             cq = update["callback_query"]
             data = cq["data"]
@@ -107,16 +96,13 @@ def check_telegram_commands():
 
             continue
 
-        # ----------------------------------------------------
         # MENSAJES NORMALES
-        # ----------------------------------------------------
         if "message" not in update:
             continue
 
         msg = update["message"]
         chat_id = msg["chat"]["id"]
 
-        # Solo responde en el grupo de comandos
         if str(chat_id) != str(TELEGRAM_COMMAND_GROUP):
             continue
 
@@ -133,16 +119,13 @@ def check_telegram_commands():
             cmd_infra(chat_id)
 
         elif text.startswith("/registrar"):
-            args = text.replace("/registrar", "").strip()
-            cmd_registrar(chat_id, args)
+            cmd_registrar(chat_id, text.replace("/registrar", "").strip())
 
         elif text.startswith("/eliminar"):
-            args = text.replace("/eliminar", "").strip()
-            cmd_eliminar(chat_id, args)
+            cmd_eliminar(chat_id, text.replace("/eliminar", "").strip())
 
         elif text.startswith("/buscar"):
-            args = text.replace("/buscar", "").strip()
-            cmd_buscar(chat_id, args)
+            cmd_buscar(chat_id, text.replace("/buscar", "").strip())
 
         elif text == "/up":
             cmd_up(chat_id)
@@ -151,8 +134,7 @@ def check_telegram_commands():
             cmd_down(chat_id)
 
         elif text.startswith("/detalle"):
-            args = text.replace("/detalle", "").strip()
-            cmd_detalle(chat_id, args)
+            cmd_detalle(chat_id, text.replace("/detalle", "").strip())
 
 
 # ==========================================================
@@ -161,18 +143,22 @@ def check_telegram_commands():
 
 def main():
     print("Iniciando monitoreo…")
-    send_alert("🚀 Monitoreo de infraestructura Heimtech iniciado v1.2")
+    send_alert(
+        "🚀 Monitoreo de infraestructura Heimtech iniciado v1.4\n"
+        "Revisa Performance SLA desde Matriz:\n"
+        "🔗 https://187.218.57.198:4443/ng/network/virtualwan/health-check"
+    )
 
-    status_prev = {}    # Estado previo UP/DOWN
-    down_since = {}     # Timestamp cuando cayó
-    alerted_down = {}   # True si ya se mandó alerta de CAÍDO tras 1 minuto
+    status_prev = {}
+    down_since = {}
+    alerted_down = {}
 
-    status_json = load_status()  # estado persistente para comandos
+    status_json = load_status()
 
     while True:
         HOSTS = load_hosts()
 
-        # Inicializar estados para hosts nuevos
+        # Inicialización
         for name, ip in HOSTS.items():
             if name not in status_prev:
                 status_prev[name] = None
@@ -184,53 +170,56 @@ def main():
             is_up = is_host_up(host)
             now = time.time()
 
-            # Actualizar status.json para comandos
+            fg_url = f"https://{host}:4443"
+            sla_url = "https://187.218.57.198:4443/ng/network/virtualwan/health-check"
+
+            # Actualizar JSON
             status_json[name] = "UP" if is_up else "DOWN"
             save_status(status_json)
 
-            # ---------- 1) PRIMERA VEZ ----------
+            # PRIMERA VEZ
             if status_prev[name] is None:
                 status_prev[name] = is_up
-                down_since[name] = None
-                alerted_down[name] = False
                 continue
 
-            # ---------- 2) SIN CAMBIO DE ESTADO ----------
+            # SIN CAMBIO
             if is_up == status_prev[name]:
 
-                # Sigue CAÍDO
-                if not is_up and down_since[name] is not None and not alerted_down[name]:
-                    if now - down_since[name] >= 60:  # 1 minuto
+                if not is_up and down_since[name] and not alerted_down[name]:
+                    if now - down_since[name] >= 60:
+
                         send_alert(
-                            f"🚨 <b>HOST CAÍDO</b>\n"
+                            f"🚨 <b>HOST CAÍDO +1 MIN</b>\n"
                             f"<b>{name}</b>\n"
                             f"IP: <code>{host}</code>\n"
-                            f"Estado: ❌ INALCANZABLE por más de 1 minuto"
+                            f"🔗 FG: {fg_url}\n\n"
+                            f"📡 Revisa Performance SLA:\n"
+                            f"{sla_url}"
                         )
-                        # Marcamos que ya se envió alerta de CAÍDO
-                        alerted_down[name] = True
 
-                # Sigue UP → no hacemos nada
+                        alerted_down[name] = True
                 continue
 
-            # ---------- 3) CAMBIO DE ESTADO ----------
+            # CAMBIOS DE ESTADO
             # UP → DOWN
             if not is_up:
                 status_prev[name] = False
                 down_since[name] = now
-                alerted_down[name] = False  # todavía no se ha alertado
+                alerted_down[name] = False
                 print(f"[DOWN] {name} detectado como caído. Esperando 60s…")
                 continue
 
             # DOWN → UP
             if is_up:
-                # Solo alertar recuperación si antes se alertó la caída
                 if alerted_down[name]:
+
                     send_alert(
                         f"✅ <b>HOST RECUPERADO</b>\n"
                         f"<b>{name}</b>\n"
                         f"IP: <code>{host}</code>\n"
-                        f"Estado: 🟢 RESPONDIENDO"
+                        f"🔗 FG: {fg_url}\n\n"
+                        f"📡 Revisa Performance SLA:\n"
+                        f"{sla_url}"
                     )
 
                 status_prev[name] = True
@@ -238,9 +227,7 @@ def main():
                 alerted_down[name] = False
                 continue
 
-        # Procesar comandos
         check_telegram_commands()
-
         time.sleep(PING_INTERVAL)
 
 
